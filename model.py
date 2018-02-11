@@ -1,8 +1,9 @@
+from __future__ import print_function
 from six.moves import xrange
 import better_exceptions
 import tensorflow as tf
 import numpy as np
-from commons.ops import *
+from ops import *
 
 def _arch_type_a(num_classes):
     def _ru(t,conv3_1,bn_1,conv3_2,bn_2):
@@ -17,16 +18,20 @@ def _arch_type_a(num_classes):
         #tf.nn.max_pool(, ksize, strides, padding, data_format='NHWC', name=None)
         y,z = y_z
 
-        _t = tf.concat([y,
-                        tf.nn.max_pool(z,[1,scale,scale,1],[1,scale,scale,1],'SAME','NHWC')],axis=3)
+        # first concat the the two coming stream (using max pooling for the residual stream
+        # reducing its size )
+        _t = tf.concat([y,tf.nn.max_pool(z,[1,scale,scale,1],[1,scale,scale,1],'SAME','NHWC')],axis=3)
+        # do two unints CONV 
         _t = conv3_1(_t)
         _t = bn_1(_t)
         _t = tf.nn.relu(_t)
         _t = conv3_2(_t)
         _t = bn_2(_t)
-        y_prime = tf.nn.relu(_t)
-
+        y_prime = tf.nn.relu(_t)   # y_prime is the next pooling stream input in the network
+        
+        # y_prime also used as the bias for the computed residual
         _t = conv1(y_prime)
+        # conv1 + bias    upscale using an unpooling layers
         _t = tf.image.resize_nearest_neighbor(_t, tf.shape(y_prime)[1:3]*scale)
         z_prime = _t + z
 
@@ -37,35 +42,50 @@ def _arch_type_a(num_classes):
         return t,z
     def _concat_stream(y_z,conv1):
         y,z = y_z
+        # only unpooling y-----
         t = tf.concat([tf.image.resize_bilinear(y, tf.shape(y)[1:3]*2), z],axis=3)
         return conv1(t)
 
+
     from functools import partial
     # The First Conv
-    spec = [
-        Conv2d('conv2d_1',3,48,5,5,1,1,data_format='NHWC'),
-        BatchNorm('conv2d_1_bn',48,axis=3),
+    spec = [Conv2d('conv2d_1',3,48,5,5,1,1,data_format='NHWC'), BatchNorm('conv2d_1_bn',48,axis=3),
         lambda t,**kwargs : tf.nn.relu(t)]
+
+
     # RU Layers
+    # first using 3 residual units to form the RU layers 
     for i in range(3):
         spec.append(
             partial(_ru,
-                    conv3_1=Conv2d('ru48_%d_1'%i,48,48,3,3,1,1,data_format='NHWC'),
+                    conv3_1 = Conv2d('ru48_%d_1'%i,48,48,3,3,1,1,data_format='NHWC'),
                     bn_1 = BatchNorm('ru48_%d_1_bn'%i,48,axis=3),
                     conv3_2=Conv2d('ru48_%d_2'%i,48,48,3,3,1,1,data_format='NHWC'),
                     bn_2 = BatchNorm('ru48_%d_2_bn'%i,48,axis=3))
         )
     # Split Streams
+    
     spec.append(
         partial(_divide_stream,
                 conv1 = Conv2d('conv32',48,32,1,1,1,1,data_format='NHWC'))
     )
+
+
     # FFRU Layers (Encoding)
     prev_ch = 48
+
+    # it: num of frru units
+    # ch: the number of the channels in every unit
+    # scale: 
+    # prev_ch + 32 means two input for the frru units
+    #  
     for it,ch,scale in [(3,96,2),(4,192,4),(2,384,8),(2,384,16)] :
+        # this layer is used for max pooling before frru units
         spec.append(
-            lambda y_z : (tf.nn.max_pool(y_z[0],[1,2,2,1],[1,2,2,1],'SAME','NHWC'),y_z[1]) #maxpooling y only.
+            lambda y_z : (tf.nn.max_pool(y_z[0],[1,2,2,1],[1,2,2,1],'SAME','NHWC'),y_z[1]) 
+            # maxpooling y only.
         )
+        # 3,4,2,2 are the units number
         for i in range(it):
             spec.append(
                 partial(_frru,
@@ -77,11 +97,15 @@ def _arch_type_a(num_classes):
                         scale=scale)
             )
             prev_ch = ch
+
+
     # FRRU Layers (Decoding)
     for it,ch,scale in [(2,192,8),(2,192,4),(2,96,2)] :
+        # this layer useing bilinear interpolation is for the unpooling layer  
         spec.append(
             lambda y_z : (tf.image.resize_bilinear(y_z[0], tf.shape(y_z[0])[1:3]*2), y_z[1])
         )
+        # frru decoding part
         for i in range(it):
             spec.append(
                 partial(_frru,
@@ -93,10 +117,13 @@ def _arch_type_a(num_classes):
                         scale=scale)
             )
             prev_ch = ch
+
+
     # Concat Streams
     spec.append(
         partial(_concat_stream,
                 conv1 = Conv2d('conv48',prev_ch+32,48,1,1,1,1,data_format='NHWC')))
+
     # RU Layers
     for i in range(3,6):
         spec.append(
@@ -106,18 +133,25 @@ def _arch_type_a(num_classes):
                     conv3_2=Conv2d('ru48_%d_2'%i,48,48,3,3,1,1,data_format='NHWC'),
                     bn_2 = BatchNorm('ru48_%d_2_bn'%i,48,axis=3))
         )
+    
     # Final Classification Layer
     spec.append(
         Conv2d('conv_c',48,num_classes,1,1,1,1,data_format='NHWC'))
 
     return spec
 
+
+
+
+
 class FRRN():
     def __init__(self,lr,global_step,K,
                  im,gt,arch_fn,
                  param_scope,is_training=False):
+
         with tf.variable_scope(param_scope):
              net_spec = arch_fn()
+
 
         with tf.variable_scope('forward'):
             _t = im
@@ -125,20 +159,33 @@ class FRRN():
                 print(_t)
                 _t = block(_t)
             self.logits = _t
+            print(self.logits)
+
             self.preds = tf.argmax(self.logits,axis=3)
+            print(self.preds)
 
             # Loss
             naive_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits,labels=gt)
+
+            print(naive_loss)
             # TODO: ignore pixels labed as void? is it requried?
             # mask = tf.logical_not(tf.equal(gt,0))
             # naive_loss = naive_loss * mask
             boot_loss,_ = tf.nn.top_k(tf.reshape(naive_loss,[tf.shape(im)[0],tf.shape(im)[1]*tf.shape(im)[2]]),k=K,sorted=False)
+            print(boot_loss)
             self.loss = tf.reduce_mean(tf.reduce_sum(boot_loss,axis=1))
+            print('-------------asd---------------------------------')
+            print(self.loss)
+            
+
+
         if( is_training ):
             with tf.variable_scope('backward'):
                 optimizer = tf.train.AdamOptimizer(lr)
+
                 self.train_op= optimizer.minimize(self.loss,global_step=global_step)
 
+        # save_vars 
         save_vars = {('train/'+'/'.join(var.name.split('/')[1:])).split(':')[0] : var for var in
                      tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,param_scope.name) }
         #for name,var in save_vars.items():
@@ -148,12 +195,23 @@ class FRRN():
 
     def save(self,sess,dir,step=None):
         if(step is not None):
+            print('----------------------kk---------')
+            print(sess)
             self.saver.save(sess,dir+'/model.ckpt',global_step=step)
+        
         else :
+            print('--------------------dd-------------')
+            print(sess)
             self.saver.save(sess,dir+'/last.ckpt')
+
 
     def load(self,sess,model):
         self.saver.restore(sess,model)
+
+
+
+
+
 
 
 if __name__ == "__main__":

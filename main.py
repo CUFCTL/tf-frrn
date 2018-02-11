@@ -38,27 +38,34 @@ def main(config,
          Z_RANGE, # z value for gamma augmentation
          SAVE_PERIOD,
          SUMMARY_PERIOD):
+
     np.random.seed(RANDOM_SEED)
     tf.set_random_seed(RANDOM_SEED)
 
     # >>>>>>> DATASET
     cityspaces = CitySpaces()
-    _,ims,lbs = cityspaces.build_queue(target='train',crop=CROP_SIZE,resize=IM_SIZE,z_range=Z_RANGE,batch_size=BATCH_SIZE,num_threads=4)
+    # crop to half size (512, 1024) then resize to (256,512)
+    _,ims,lbs = cityspaces.build_queue(crop=CROP_SIZE,resize=IM_SIZE,z_range=Z_RANGE,batch_size=BATCH_SIZE,num_threads=4)
     """
     _,valid_ims,valid_lbs = cityspaces.build_queue(target='val')
     """
-    # <<<<<<<
+    #Tensor("batch:1", shape=(?, 256, 512, 3), dtype=float32, device=/device:CPU:*)
+    #Tensor("batch:2", shape=(?, 256, 512), dtype=int32, device=/device:CPU:*)
 
+
+
+    
     # >>>>>>> MODEL
     with tf.variable_scope('train'):
         global_step = tf.Variable(0, trainable=False)
         learning_rate = tf.train.exponential_decay(LEARNING_RATE, global_step, DECAY_STEPS, DECAY_VAL, staircase=DECAY_STAIRCASE)
         tf.summary.scalar('lr',learning_rate)
-
+        
         with tf.variable_scope('params') as params:
             pass
         net = FRRN(learning_rate,global_step,K,ims,lbs,partial(_arch_type_a,NUM_CLASSES),params,True)
 
+      
     """
     #Memory Constraint....
     with tf.variable_scope('valid'):
@@ -154,22 +161,26 @@ def eval(MODEL,
          TARGET,
          BATCH_SIZE,
          **kwargs):
+    # if no place in result to save segmation images, bulid the file
     if not os.path.exists(os.path.join('results',TARGET)):
         os.makedirs(os.path.join('results',TARGET))
     # >>>>>>> DATASET
+    # first import the label L s
     from cityscapesScripts.cityscapesscripts.helpers import labels as L
     from cityscapesScripts.cityscapesscripts.evaluation import evalPixelLevelSemanticLabeling as E
     from PIL import Image
 
+    #save all labels in trainID2id
     trainId2id = np.zeros((20,),np.uint8)
     for i in range(19):
         trainId2id[i] = L.trainId2label[i].id
     trainId2id[19] = 0
 
+    # cityspaces now have all the images, import the target part images for using now
     cityspaces = CitySpaces()
     scale_factor = np.array(kwargs['CROP_SIZE'])/np.array(kwargs['IM_SIZE'])
     size = tuple(int(l//s) for (l,s) in zip(cityspaces.image_size,scale_factor))
-    imnames,ims,lbs = cityspaces.build_queue(target=TARGET,crop=cityspaces.image_size,resize=size,z_range=None,batch_size=BATCH_SIZE,num_threads=2)
+    imnames,ims, lbs = cityspaces.build_queue(target=TARGET,crop=cityspaces.image_size,resize=size,z_range=None,batch_size=BATCH_SIZE,num_threads=2)
     # <<<<<<<
 
     # >>>>>>> MODEL
@@ -195,12 +206,12 @@ def eval(MODEL,
         while not coord.should_stop():
             names,preds = sess.run([imnames,net.preds])
             for name,pred in zip(names,preds):
-                name = os.path.basename(str(name,'utf-8'))
+                name = os.path.basename(unicode(name,'utf-8'))
                 im = Image.fromarray(trainId2id[pred])
                 im = im.resize((cityspaces.image_size[1],cityspaces.image_size[0]),
                                Image.NEAREST)
                 im.save(os.path.join('results',TARGET,name),"PNG")
-            print('.', end='', flush=True)
+            #print('.', end='', flush=True)
     except tf.errors.OutOfRangeError:
         print('Complete')
 
@@ -209,13 +220,82 @@ def eval(MODEL,
 
     E.main([TARGET])
 
+
+def test(MODEL,
+         TARGET,
+         BATCH_SIZE,
+         **kwargs):
+    if not os.path.exists(os.path.join('results',TARGET)):
+        os.makedirs(os.path.join('results',TARGET))
+    # >>>>>>> DATASET
+    from cityscapesScripts.cityscapesscripts.helpers import labels as L
+    from cityscapesScripts.cityscapesscripts.evaluation import evalPixelLevelSemanticLabeling as E
+    from PIL import Image
+
+    trainId2id = np.zeros((20,),np.uint8)
+    for i in range(19):
+        trainId2id[i] = L.trainId2label[i].id
+    trainId2id[19] = 0
+
+    cityspaces = CitySpaces()
+    # scale_factor [2,2]
+    scale_factor = np.array(kwargs['CROP_SIZE'])/np.array(kwargs['IM_SIZE'])
+    # size (512,1024)
+    size = tuple(int(l//s) for (l,s) in zip(cityspaces.image_size,scale_factor))
+    
+    # crop the same size as before, resize to half 
+    imnames,ims = cityspaces.build_queue(target=TARGET,crop=cityspaces.image_size,resize=size,z_range=None,batch_size=BATCH_SIZE,num_threads=2)
+
+    # <<<<<<<
+
+    # >>>>>>> MODEL
+    with tf.variable_scope('net'):
+        with tf.variable_scope('params') as params:
+            pass
+        net = FRRN(None,None,kwargs['K'],ims,None,partial(_arch_type_a,NUM_CLASSES),params,False)
+
+
+    init_op = tf.group(tf.global_variables_initializer(),
+                    tf.local_variables_initializer())
+
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Run!
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
+    sess.graph.finalize()
+    sess.run(init_op)
+    net.load(sess,MODEL)
+
+    coord = tf.train.Coordinator()
+    threads = tf.train.start_queue_runners(coord=coord,sess=sess)
+    try:
+        while not coord.should_stop():
+            names,preds = sess.run([imnames,net.preds])
+            for name,pred in zip(names,preds):
+              
+
+                name = os.path.basename(unicode(name[0],'utf-8'))
+                im = Image.fromarray(trainId2id[pred])
+                im = im.resize((cityspaces.image_size[1],cityspaces.image_size[0]),
+                               Image.NEAREST)
+                im.save(os.path.join('results',TARGET,name),"PNG")
+            #print('.', end='', flush=True)
+    except tf.errors.OutOfRangeError:
+        print('Complete')
+
+    coord.request_stop()
+    coord.join(threads)
+
+    E.main([TARGET])
+
+
 def get_default_param():
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
         'LOG_DIR':'./log/%s'%(now),
 
-        'TRAIN_NUM' : 100000, #Size corresponds to one epoch
+        'TRAIN_NUM' : 161, #Size corresponds to one epoch
         'BATCH_SIZE': 3,
 
         'LEARNING_RATE' : 0.001,
@@ -243,4 +323,5 @@ if __name__ == "__main__":
     config.as_matrix = as_matrix
 
     main(config=config,**config)
-    #eval(MODEL='models/arch_type_a/last.ckpt',TARGET='val',**config)
+    #eval(MODEL='log/train_log/last.ckpt',TARGET='val',**config)
+    #test(MODEL = 'log/train_log/last.ckpt',TARGET = 'test',**config)
