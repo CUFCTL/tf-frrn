@@ -295,7 +295,7 @@ def get_default_param():
     return {
         'LOG_DIR':'./log/%s'%(now),
 
-        'TRAIN_NUM' : 161, #Size corresponds to one epoch
+        'TRAIN_NUM' : 1000, #Size corresponds to one epoch
         'BATCH_SIZE': 3,
 
         'LEARNING_RATE' : 0.001,
@@ -303,9 +303,9 @@ def get_default_param():
         'DECAY_STEPS' : 20000, # Half of the training procedure.
         'DECAY_STAIRCASE' : False,
 
-        'K':512*64,
-        'CROP_SIZE':(512,1024),
-        'IM_SIZE' :(256,512), #Prediction is made at 1/2 scale.
+        'K':256*64,
+        'CROP_SIZE':(128,256),
+        'IM_SIZE' :(64,128), #Prediction is made at 1/2 scale.
         'Z_RANGE':0.05,
 
         'SUMMARY_PERIOD' : 10,

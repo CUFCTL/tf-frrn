@@ -80,7 +80,7 @@ def _arch_type_a(num_classes):
     # prev_ch + 32 means two input for the frru units
     #  
     for it,ch,scale in [(3,96,2),(4,192,4),(2,384,8),(2,384,16)] :
-        # this layer is used for max pooling before frru units
+        # this layer is used for max pooling before frru units before frru it + 32
         spec.append(
             lambda y_z : (tf.nn.max_pool(y_z[0],[1,2,2,1],[1,2,2,1],'SAME','NHWC'),y_z[1]) 
             # maxpooling y only.
@@ -97,7 +97,8 @@ def _arch_type_a(num_classes):
                         scale=scale)
             )
             prev_ch = ch
-
+            
+    
 
     # FRRU Layers (Decoding)
     for it,ch,scale in [(2,192,8),(2,192,4),(2,96,2)] :
@@ -159,24 +160,24 @@ class FRRN():
                 print(_t)
                 _t = block(_t)
             self.logits = _t
-            print(self.logits)
-
+            #Tensor("train/forward/BiasAdd_66:0", shape=(?, 256, 512, 20), dtype=float32)
             self.preds = tf.argmax(self.logits,axis=3)
-            print(self.preds)
+            #Tensor("train/forward/ArgMax:0", shape=(?, 256, 512), dtype=int64)
 
             # Loss
             naive_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits,labels=gt)
+            #Tensor("train/forward/SparseSoftmaxCrossEntropyWithLogits/Reshape_2:0", shape=(?, 256, 512), dtype=float32)
 
-            print(naive_loss)
+
             # TODO: ignore pixels labed as void? is it requried?
             # mask = tf.logical_not(tf.equal(gt,0))
             # naive_loss = naive_loss * mask
-            boot_loss,_ = tf.nn.top_k(tf.reshape(naive_loss,[tf.shape(im)[0],tf.shape(im)[1]*tf.shape(im)[2]]),k=K,sorted=False)
-            print(boot_loss)
-            self.loss = tf.reduce_mean(tf.reduce_sum(boot_loss,axis=1))
-            print('-------------asd---------------------------------')
-            print(self.loss)
             
+
+            boot_loss,_ = tf.nn.top_k(tf.reshape(naive_loss,[tf.shape(im)[0],tf.shape(im)[1]*tf.shape(im)[2]]),k=K,sorted=False)
+        
+            self.loss = tf.reduce_mean(tf.reduce_sum(boot_loss,axis=1))
+        
 
 
         if( is_training ):
@@ -195,15 +196,11 @@ class FRRN():
 
     def save(self,sess,dir,step=None):
         if(step is not None):
-            print('----------------------kk---------')
-            print(sess)
             self.saver.save(sess,dir+'/model.ckpt',global_step=step)
         
         else :
-            print('--------------------dd-------------')
-            print(sess)
             self.saver.save(sess,dir+'/last.ckpt')
-
+ 
 
     def load(self,sess,model):
         self.saver.restore(sess,model)

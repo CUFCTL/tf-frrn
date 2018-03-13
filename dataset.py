@@ -10,20 +10,17 @@ from tqdm import tqdm
 class CitySpaces():
     def __init__(self,
                  data_dir='datasets/cityspaces',
-                 image_size=(1024,),
+                 image_size=(512,256),
                  seed=0):
  
         #import label and images from datasets
         searchFine = os.path.join( data_dir, 'CameraSeg','*.png')
         labels = sorted(glob.glob( searchFine))
  
- 
         searchFine = os.path.join( data_dir, 'CameraRGB','*.png' )
         images = sorted(glob.glob( searchFine ))
  
  
-
-
         #searchFine = os.path.join( data_dir, "gtFine", 'train' , "*" , "*labelTrainIds*.png" )
         #labels = sorted(glob.glob( searchFine ))
 
@@ -32,7 +29,6 @@ class CitySpaces():
         #for l,i in zip(labels[target],images[target]):
         #    assert( ''.join(os.path.basename(l).split('_')[:2]) ==
         #                        ''.join(os.path.basename(i).split('_')[:2])), (l,i)
- 
  
         #assert( len(labels) == 93 and len(images) == 93)
  
@@ -88,7 +84,6 @@ class CitySpaces():
             gamma = tf.log(0.5+2**(-0.5)*z) / tf.log(0.5-2**(-0.5)*z)
 
             pp = (tf.cast(pp,tf.float32) / 255.0)**(gamma)
-
             #pp : Tensor("pow:0", shape=(256, 512, 3), dtype=float32, device=/device:CPU:*)
 
 
@@ -110,6 +105,7 @@ class CitySpaces():
             #Tensor("batch:0", shape=(?,), dtype=string, device=/device:CPU:*)
             #Tensor("batch:1", shape=(?, 256, 512, 3), dtype=float32, device=/device:CPU:*)
             #Tensor("batch:2", shape=(?, 256, 512), dtype=int32, device=/device:CPU:*)
+
             return imnames,x,y
              
  
